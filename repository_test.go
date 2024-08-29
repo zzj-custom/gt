@@ -1,4 +1,4 @@
-package template
+package gt
 
 import (
 	"gorm.io/gorm"
@@ -24,7 +24,7 @@ func TestRepository_Generate(t *testing.T) {
 		{
 			name: "生成数据",
 			fields: fields{
-				Path: "/Users/Apple/Application/github/template",
+				Path: "/Users/Apple/Application/github/gt/repository",
 				DSN:  "root:abc123@tcp(192.168.150.59:3306)/mohe?parseTime=true&loc=Local",
 				TableFields: map[string][]string{
 					"daily_sku_summary": {},

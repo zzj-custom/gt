@@ -1,16 +1,81 @@
-package template
+package gt
 
 import (
 	"fmt"
+	"github.com/duke-git/lancet/fileutil"
 	"github.com/pkg/errors"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gt/g"
+	"gt/keywords"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 )
+
+type KeywordsExpress struct {
+	Keywords string
+	Express  string
+}
+
+var msKeywordsToGoKeywordsMap = map[string]KeywordsExpress{
+	"int": {
+		Keywords: "int",
+		Express:  ">0",
+	},
+	"tinyint": {
+		Keywords: "int",
+		Express:  ">0",
+	},
+	"smallint": {
+		Keywords: "int",
+		Express:  ">0",
+	},
+	"mediumint": {
+		Keywords: "int",
+		Express:  ">0",
+	},
+	"bigint": {
+		Keywords: "int",
+		Express:  ">0",
+	},
+	"varchar": {
+		Keywords: "int",
+		Express:  `!=""`,
+	},
+	"char": {
+		Keywords: "int",
+		Express:  `!=""`,
+	},
+	"text": {
+		Keywords: "int",
+		Express:  `!=""`,
+	},
+	"date": {
+		Keywords: "time.Time",
+		Express:  ``,
+	},
+	"datetime": {
+		Keywords: "time.Time",
+		Express:  ``,
+	},
+	"timestamp": {
+		Keywords: "time.Time",
+		Express:  ``,
+	},
+	"float": {
+		Keywords: "int",
+		Express:  ">0",
+	},
+	"double": {
+		Keywords: "int",
+		Express:  ">0",
+	},
+	"json": {
+		Keywords: "int",
+		Express:  `!=""`,
+	},
+}
 
 type Repository struct {
 	Path        string // 生成代码的路径
@@ -103,7 +168,7 @@ func (r *Repository) Generate() error {
 	}
 
 	for key, value := range r.TableFields {
-		generate := g.New()
+		generate := keywords.New()
 		f := generate.NewGroup()
 		f.AddPackage(filepath.Base(r.Path))
 		f.NewImport().AddPath("gorm.io/gorm").
@@ -124,10 +189,10 @@ func (r *Repository) Generate() error {
 			return errors.Wrap(err, "failed to get table columns")
 		}
 		for _, v := range columns {
-			s.AddField(ToUpperCamelCase(v.Field), r.columnType(v.Type))
+			s.AddFieldWithTag(ToUpperCamelCase(v.Field), r.columnType(v.Type), r.tag(v))
 		}
 		f.NewFunction("TableName").WithReceiver(GetInitials(key), "*"+tableUpperCamelCase).
-			AddResult("t", "string").AddBody(g.String(`return "` + key + `"`))
+			AddResult("t", "string").AddBody(keywords.String(`return "` + key + `"`))
 
 		suffix := "Repository"
 		repo := tableLowerCamelCase + suffix
@@ -138,17 +203,17 @@ func (r *Repository) Generate() error {
 
 		f.NewFunction("New"+tableUpperCamelCase+suffix).AddResult("", "*"+tableUpperCamelCase+suffix).
 			AddBody(
-				g.String(tableLowerCamelCase+"Once.Do(func() {"),
-				g.String(`conn, err := iMysql.Conn("%s")`, r.dbInfo.database),
-				g.If(g.String("err != nil")).AddBody(
-					g.String(`slog.With(slog.With("database", "%s")).With("err", err).Error("数据库连接失败")`, r.dbInfo.database),
-					g.String("return"),
+				keywords.String(tableLowerCamelCase+"Once.Do(func() {"),
+				keywords.String(`conn, err := iMysql.Conn("%s")`, r.dbInfo.database),
+				keywords.If(keywords.String("err != nil")).AddBody(
+					keywords.String(`slog.With(slog.With("database", "%s")).With("err", err).Error("数据库连接失败")`, r.dbInfo.database),
+					keywords.String("return"),
 				),
-				g.String(repo+" = &"+tableUpperCamelCase+suffix+"{"),
-				g.String("db: conn,"),
-				g.String("}"),
-				g.String(`})`),
-				g.String(`return `+repo),
+				keywords.String(repo+" = &"+tableUpperCamelCase+suffix+"{"),
+				keywords.String("db: conn,"),
+				keywords.String("}"),
+				keywords.String(`})`),
+				keywords.String(`return `+repo),
 			)
 
 		// 如果字段存在的话，那么创建查询的scope
@@ -157,20 +222,33 @@ func (r *Repository) Generate() error {
 			f.NewFunction("scope"+ToUpperCamelCase(v)).
 				WithReceiver("r", "*"+tableUpperCamelCase+suffix).AddResult("", "func(*gorm.DB) *gorm.DB").
 				AddParameter(v, r.columnType(columnType)).
-				AddBody(g.String(`return func(db *gorm.DB) *gorm.DB {`),
-					g.If(g.String("%s %s", v, r.express(columnType))).AddBody(
-						g.String(`return db.Where("%s = ?", `+v+`)`, v),
+				AddBody(keywords.String(`return func(db *gorm.DB) *gorm.DB {`),
+					keywords.If(keywords.String("%s %s", v, r.express(columnType))).AddBody(
+						keywords.String(`return db.Where("%s = ?", `+v+`)`, v),
 					),
-					g.String(`return db`),
-					g.String(`}`),
+					keywords.String(`return db`),
+					keywords.String(`}`),
 				)
 		}
 
 		if r.IsCreate {
 			f.NewFunction("CreateByModel").WithReceiver("r", "*"+tableUpperCamelCase+suffix).AddResult("", "error").
-				AddParameter("model", "*"+tableUpperCamelCase).AddBody(g.String(`return r.db.Model(&%s{}).Create(data).Error`, tableUpperCamelCase))
+				AddParameter("model", "*"+tableUpperCamelCase).AddBody(keywords.String(`return r.db.Model(&%s{}).Create(model).Error`, tableUpperCamelCase))
 		}
 
+		if r.IsUpdate {
+			f.NewFunction("UpdateByModel").WithReceiver("r", "*"+tableUpperCamelCase+suffix).AddResult("", "error").
+				AddParameter("id", "int").
+				AddParameter("model", "*"+tableUpperCamelCase).
+				AddBody(keywords.String(`return r.db.Model(&%s{}).Where("id = ?", id).Updates(model).Error`, tableUpperCamelCase))
+		}
+
+		// 如果不存在那么就创建目录
+		if ok = fileutil.IsExist(r.Path); !ok {
+			if err = fileutil.CreateDir(r.Path); err != nil {
+				return errors.Wrap(err, "failed to create directory")
+			}
+		}
 		p := fmt.Sprintf("%s/%s.go", r.Path, key)
 		if err = generate.WriteFile(p); err != nil {
 			return errors.Wrap(err, "failed to write file")
@@ -183,6 +261,32 @@ func (r *Repository) Generate() error {
 	return nil
 }
 
+func (r *Repository) tag(column *TableColumns) string {
+	str := fmt.Sprintf("gorm:\"column:%s;type:%s", column.Field, column.Type)
+
+	if column.Key == "" && r.columnType(column.Type) == "string" {
+		str += ";default:''"
+	} else {
+		str += fmt.Sprintf(";default:%s", column.Default)
+	}
+	if column.Key == "UNI" {
+		str += ";UNIQUE"
+	}
+	if column.Key == "PRI" {
+		str += ";PRIMARY KEY"
+	}
+	if column.Extra == "auto_increment" {
+		str += ";AUTO_INCREMENT"
+	}
+	if column.Null == "NO" {
+		str += ";NOT NULL"
+	}
+	if column.Comment != "" {
+		str += fmt.Sprintf(";comment:'%s'", column.Comment)
+	}
+	return str + "\""
+}
+
 func (r *Repository) tableFieldType(columns []*TableColumns, f string) string {
 	for _, v := range columns {
 		if f == v.Field {
@@ -193,30 +297,19 @@ func (r *Repository) tableFieldType(columns []*TableColumns, f string) string {
 }
 
 func (r *Repository) express(t string) string {
-	if strings.Contains(t, "int") {
-		return ">0"
-	} else if strings.Contains(t, "varchar") || strings.Contains(t, "text") {
-		return `!=""`
+	for key, value := range msKeywordsToGoKeywordsMap {
+		if strings.Contains(t, key) {
+			return value.Express
+		}
 	}
 	return `!=""`
 }
 
 func (r *Repository) columnType(t string) string {
-	// TODO 待优化，待补充字段类型
-	if t == "" {
-		return "string"
-	}
-
-	if strings.Contains(t, "int") {
-		return "int"
-	}
-
-	if strings.Contains(t, "varchar") {
-		return "string"
-	}
-
-	if strings.Contains(t, "date") {
-		return "time.Time"
+	for key, value := range msKeywordsToGoKeywordsMap {
+		if strings.Contains(t, key) {
+			return value.Keywords
+		}
 	}
 	return "string"
 }
